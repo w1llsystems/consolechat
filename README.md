@@ -4,6 +4,7 @@
 
 Site publicado (GitHub Pages):
 
-- https://w1llsystems.github.io/consolechat/
+- https://w1llsystems.github.io/consolechat/ (para uso local).
+- https://consolechat.netlify.app/ (global).
 
 Pequeno app estático (HTML + Tailwind + JS) com comportamento de chat anônimo local. Não armazena histórico de mensagens no servidor — apenas usa localStorage para bloquear alteração de nickname enquanto o IP público for o mesmo.
