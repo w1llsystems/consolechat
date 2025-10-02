@@ -26,7 +26,7 @@
 <div class="w-3 h-3 bg-yellow-500 rounded-full"></div>
 <div class="w-3 h-3 bg-green-500 rounded-full"></div>
 </div>
-<p class="text-gray-400 text-sm">CHAT_APP - bash</p>
+<p class="text-gray-400 text-sm">CHAT_APP - bash <span id="status-pill" class="ml-3 inline-block rounded px-2 py-0.5 text-[10px] bg-yellow-700 text-yellow-100">connecting...</span></p>
 <div class="w-12"></div>
 </div>
 <div class="flex-1 p-4 space-y-4 overflow-y-auto">
@@ -84,6 +84,7 @@
         const messageTextarea = document.querySelector('.message-input textarea');
         const sendButton = document.querySelector('.message-input button');
         const activeUsersListEl = document.querySelector('#active-users-list');
+    const statusPill = document.getElementById('status-pill');
 
         // Make sure button acts as button
         if (sendButton) sendButton.setAttribute('type', 'button');
@@ -101,6 +102,17 @@
             p.className = 'text-[#00FF00] text-base font-normal leading-normal';
             p.textContent = text;
             return p;
+        }
+
+        function setStatus(text, tone = 'yellow') {
+            if (!statusPill) return;
+            statusPill.textContent = text;
+            const map = {
+                yellow: ['bg-yellow-700','text-yellow-100'],
+                green: ['bg-green-700','text-green-100'],
+                red: ['bg-red-700','text-red-100']
+            };
+            statusPill.className = 'ml-3 inline-block rounded px-2 py-0.5 text-[10px] ' + (map[tone] || map.yellow).join(' ');
         }
 
         function pruneIfOverflowing() {
@@ -126,6 +138,7 @@
                 // Use Netlify Function to obtain a Token (Token Auth)
                 const authUrl = '/.netlify/functions/ably-token?clientId=' + encodeURIComponent(nick);
                 ably = new Ably.Realtime({ authUrl });
+                setStatus('connecting...', 'yellow');
             } catch (e) {
                 const errMsg = createMessageElement('[System]: Failed to initialize Ably client. Falling back to local mode.');
                 chatMessagesEl.appendChild(errMsg);
@@ -136,28 +149,46 @@
             ably.connection.on((stateChange) => {
                 if (stateChange.current === 'connected') {
                     ablyConnected = true;
+                    setStatus('connected', 'green');
                     ablyChannel = ably.channels.get('public:chat');
 
-                    // Subscribe to messages
-                    ablyChannel.subscribe('message', (msg) => {
-                        const payload = msg.data || {};
-                        const who = payload.nick || msg.clientId || 'Guest';
-                        const text = payload.text || '';
-                        if (!text) return;
-                        const line = createMessageElement(`[${who}]: ${text}`);
-                        chatMessagesEl.appendChild(line);
-                        chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
-                        pruneIfOverflowing();
-                    });
+                    // Attach explicitly to catch permission errors
+                    ablyChannel.attach((attachErr) => {
+                        if (attachErr) {
+                            setStatus('attach failed', 'red');
+                            const err = createMessageElement('[System]: Failed to attach to channel public:chat. Check capabilities / channel restrictions.');
+                            chatMessagesEl.appendChild(err);
+                            pruneIfOverflowing();
+                            return;
+                        }
 
-                    // Presence
-                    ablyChannel.presence.enter({ nick });
-                    ablyChannel.presence.get((err, members) => {
-                        if (!err) renderActiveUsers(members);
-                    });
-                    ablyChannel.presence.subscribe((presenceMsg) => {
+                        // Subscribe to messages
+                        ablyChannel.subscribe('message', (msg) => {
+                            const payload = msg.data || {};
+                            const who = payload.nick || msg.clientId || 'Guest';
+                            const text = payload.text || '';
+                            if (!text) return;
+                            const line = createMessageElement(`[${who}]: ${text}`);
+                            chatMessagesEl.appendChild(line);
+                            chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+                            pruneIfOverflowing();
+                        });
+
+                        // Presence
+                        ablyChannel.presence.enter({ nick }, (presenceErr) => {
+                            if (presenceErr) {
+                                const er = createMessageElement('[System]: Presence enter failed.');
+                                chatMessagesEl.appendChild(er);
+                                pruneIfOverflowing();
+                            }
+                        });
                         ablyChannel.presence.get((err, members) => {
                             if (!err) renderActiveUsers(members);
+                        });
+                        ablyChannel.presence.subscribe(() => {
+                            ablyChannel.presence.get((err, members) => {
+                                if (!err) renderActiveUsers(members);
+                            });
                         });
                     });
 
@@ -167,8 +198,9 @@
                     });
                 } else if (stateChange.current === 'failed' || stateChange.current === 'suspended') {
                     ablyConnected = false;
-                    const msg = createMessageElement('[System]: Connection to Ably lost. Messages will be local-only until reconnection.');
-                    chatMessagesEl.appendChild(msg);
+                    setStatus(stateChange.current, 'red');
+                    const msgLine = createMessageElement('[System]: Connection to Ably lost. Messages will be local-only until reconnection.');
+                    chatMessagesEl.appendChild(msgLine);
                     pruneIfOverflowing();
                 }
             });
@@ -246,9 +278,16 @@
             if (ablyConnected && ablyChannel) {
                 // Publish via Ably to broadcast to all
                 try {
-                    ablyChannel.publish('message', { nick, text });
+                    ablyChannel.publish('message', { nick, text }, (err) => {
+                        if (err) {
+                            const warn = createMessageElement('[System]: Publish failed (check channel permissions). Showing locally.');
+                            chatMessagesEl.appendChild(warn);
+                            const msg = createMessageElement(`[${nick}]: ${text}`);
+                            chatMessagesEl.appendChild(msg);
+                        }
+                    });
                 } catch (_) {
-                    // Fallback to local append if publish fails
+                    // Fallback to local append if publish throws synchronously
                     const msg = createMessageElement(`[${nick}]: ${text}`);
                     chatMessagesEl.appendChild(msg);
                 }
