@@ -47,7 +47,7 @@
             </div>
             <div class="message-input hidden flex flex-wrap items-end gap-2 py-2">
                 <label class="flex flex-col flex-1">
-                    <textarea class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded text-[#00FF00] focus:outline-0 focus:ring-0 border border-[#2A3B2A] bg-[#0D0D0D] focus:border-[#2A3B2A] min-h-[64px] placeholder:text-gray-500 p-[8px] text-sm font-normal leading-normal" maxlength="200" placeholder="Type your message (max 200 chars)"></textarea>
+                    <textarea class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded text-[#00FF00] focus:outline-0 focus:ring-0 border border-[#2A3B2A] bg-[#0D0D0D] focus:border-[#2A3B2A] min-h-[64px] placeholder:text-gray-500 p-[8px] text-sm font-normal leading-normal" maxlength="80" placeholder="Type your message (max 80 chars)"></textarea>
                 </label>
                 <div class="flex justify-start">
                     <button class="flex min-w-[64px] max-w-[160px] cursor-pointer items-center justify-center overflow-hidden rounded h-8 px-3 bg-[#00FF00] text-black text-sm font-bold leading-normal tracking-[0.015em]" type="button">
@@ -92,15 +92,62 @@
         // State
         let currentIp = null;
         let ipCheckAvailable = false;
-    let ably = null;
+        let ably = null;
         let ablyChannel = null;
         let ablyConnected = false;
+        // Track the current nickname in use (for mention highlighting)
+        let currentNick = null;
+        // Max history lines to keep
+        const MAX_HISTORY = 200;
 
         // Helpers
         function createMessageElement(text) {
             const p = document.createElement('p');
-            p.className = 'text-[#00FF00] text-base font-normal leading-normal';
+            p.className = 'text-[#00FF00] text-base font-normal leading-normal whitespace-pre-wrap break-words';
             p.textContent = text;
+            return p;
+        }
+
+        // Escape HTML to prevent injection when using innerHTML in renderMessage
+        function escapeHtml(str) {
+            return String(str).replace(/[&<>"']/g, (ch) => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            })[ch]);
+        }
+
+        function escapeRegExp(str) {
+            return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        // Format @mentions in already-escaped text. Highlights @me specially.
+        function formatMentions(escapedText, myNick) {
+            const re = /(^|\s)@([\w-]{1,32})\b/g;
+            return escapedText.replace(re, (m, pre, name) => {
+                const isMe = myNick && name.toLowerCase() === myNick.toLowerCase();
+                const cls = isMe ? 'text-yellow-300 font-bold' : 'text-yellow-300';
+                return `${pre}<span class="${cls}">@${name}</span>`;
+            });
+        }
+
+        // Render a message safely, with mention highlighting and optional line highlight when my nick is mentioned
+        function renderMessage(who, text) {
+            const p = document.createElement('p');
+            p.className = 'text-[#00FF00] text-base font-normal leading-normal whitespace-pre-wrap break-words';
+            const safeWho = escapeHtml(who || 'Guest');
+            let safeText = escapeHtml(text || '');
+            safeText = formatMentions(safeText, currentNick);
+            p.innerHTML = `[${safeWho}]: ${safeText}`;
+            // If my nick is mentioned, add a subtle background to the whole message
+            if (currentNick) {
+                const meRegex = new RegExp(`(^|\\s)@${escapeRegExp(currentNick)}\\b`, 'i');
+                if (meRegex.test(text || '')) {
+                    p.classList.add('bg-yellow-900/30');
+                }
+            }
             return p;
         }
 
@@ -116,7 +163,13 @@
         }
 
         function pruneIfOverflowing() {
-            while (chatMessagesEl && chatMessagesEl.scrollHeight > chatMessagesEl.clientHeight && chatMessagesEl.firstChild) {
+            if (!chatMessagesEl) return;
+            // 1) Enforce max lines
+            while (chatMessagesEl.childElementCount > MAX_HISTORY && chatMessagesEl.firstChild) {
+                chatMessagesEl.removeChild(chatMessagesEl.firstChild);
+            }
+            // 2) Enforce visual overflow (keep removing until fits)
+            while (chatMessagesEl.scrollHeight > chatMessagesEl.clientHeight && chatMessagesEl.firstChild) {
                 chatMessagesEl.removeChild(chatMessagesEl.firstChild);
             }
         }
@@ -168,10 +221,10 @@
                             const who = payload.nick || msg.clientId || 'Guest';
                             const text = payload.text || '';
                             if (!text) return;
-                            const line = createMessageElement(`[${who}]: ${text}`);
+                            const line = renderMessage(who, text);
                             chatMessagesEl.appendChild(line);
-                            chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
                             pruneIfOverflowing();
+                            chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
                         });
 
                         // Presence
@@ -261,11 +314,12 @@
             if (messageInputWrapper) messageInputWrapper.classList.remove('hidden');
             if (chatMessagesEl) {
                 chatMessagesEl.innerHTML = '';
-                const welcome = createMessageElement(`[System]: Welcome, ${nick}!`);
+                const welcome = renderMessage('System', `Welcome, ${nick}!`);
                 chatMessagesEl.appendChild(welcome);
                 pruneIfOverflowing();
             }
             // Connect to Ably (if configured)
+            currentNick = nick;
             ablyConnect(nick);
             messageTextarea && messageTextarea.focus();
         }
@@ -280,21 +334,28 @@
                 try {
                     ablyChannel.publish('message', { nick, text }, (err) => {
                         if (err) {
-                            const warn = createMessageElement('[System]: Publish failed (check channel permissions). Showing locally.');
+                            const warn = renderMessage('System', 'Publish failed (check channel permissions). Showing locally.');
                             chatMessagesEl.appendChild(warn);
-                            const msg = createMessageElement(`[${nick}]: ${text}`);
-                            chatMessagesEl.appendChild(msg);
+                            pruneIfOverflowing();
+                            const msgEl = renderMessage(nick, text);
+                            chatMessagesEl.appendChild(msgEl);
+                            pruneIfOverflowing();
+                            chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
                         }
                     });
                 } catch (_) {
                     // Fallback to local append if publish throws synchronously
-                    const msg = createMessageElement(`[${nick}]: ${text}`);
-                    chatMessagesEl.appendChild(msg);
+                    const msgEl = renderMessage(nick, text);
+                    chatMessagesEl.appendChild(msgEl);
+                    pruneIfOverflowing();
+                    chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
                 }
             } else {
                 // Local-only mode
-                const msg = createMessageElement(`[${nick}]: ${text}`);
-                chatMessagesEl.appendChild(msg);
+                const msgEl = renderMessage(nick, text);
+                chatMessagesEl.appendChild(msgEl);
+                pruneIfOverflowing();
+                chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
             }
             messageTextarea.value = '';
             chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
@@ -369,6 +430,12 @@
             });
 
             initialStateEl && initialStateEl.addEventListener('click', () => nicknameInput && nicknameInput.focus());
+
+            // Disable right-click context menu to prevent opening options with mouse button 2
+            document.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                return false;
+            });
 
         })();
 
