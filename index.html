@@ -92,11 +92,14 @@
         // State
         let currentIp = null;
         let ipCheckAvailable = false;
-        let ably = null;
-        let ablyChannel = null;
-        let ablyConnected = false;
-        // Track the current nickname in use (for mention highlighting)
-        let currentNick = null;
+    let ably = null;
+    let ablyChannel = null;
+    let ablyConnected = false;
+    // Track the current nickname in use (for mention highlighting)
+    let currentNick = null;
+    // Guards to avoid duplicate attach/subscribe
+    let ablyAttached = false;
+    let messageSubscribed = false;
         // Max history lines to keep
         const MAX_HISTORY = 200;
 
@@ -187,7 +190,17 @@
         }
 
         function ablyConnect(nick) {
+            // If there's an existing client, close it first to avoid duplicate subscriptions
             try {
+                if (ably) {
+                    try { ably.close(); } catch (_) {}
+                    ably = null;
+                    ablyChannel = null;
+                    ablyAttached = false;
+                    messageSubscribed = false;
+                    ablyConnected = false;
+                }
+
                 // Use Netlify Function to obtain a Token (Token Auth)
                 const authUrl = '/.netlify/functions/ably-token?clientId=' + encodeURIComponent(nick);
                 ably = new Ably.Realtime({ authUrl });
@@ -205,49 +218,61 @@
                     setStatus('connected', 'green');
                     ablyChannel = ably.channels.get('public:chat');
 
-                    // Attach explicitly to catch permission errors
-                    ablyChannel.attach((attachErr) => {
-                        if (attachErr) {
-                            setStatus('attach failed', 'red');
-                            const err = createMessageElement('[System]: Failed to attach to channel public:chat. Check capabilities / channel restrictions.');
-                            chatMessagesEl.appendChild(err);
-                            pruneIfOverflowing();
-                            return;
-                        }
-
-                        // Subscribe to messages
-                        ablyChannel.subscribe('message', (msg) => {
-                            const payload = msg.data || {};
-                            const who = payload.nick || msg.clientId || 'Guest';
-                            const text = payload.text || '';
-                            if (!text) return;
-                            const line = renderMessage(who, text);
-                            chatMessagesEl.appendChild(line);
-                            pruneIfOverflowing();
-                            chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
-                        });
-
-                        // Presence
-                        ablyChannel.presence.enter({ nick }, (presenceErr) => {
-                            if (presenceErr) {
-                                const er = createMessageElement('[System]: Presence enter failed.');
-                                chatMessagesEl.appendChild(er);
+                    // Attach explicitly once to catch permission errors
+                    if (!ablyAttached) {
+                        ablyChannel.attach((attachErr) => {
+                            if (attachErr) {
+                                setStatus('attach failed', 'red');
+                                const err = createMessageElement('[System]: Failed to attach to channel public:chat. Check capabilities / channel restrictions.');
+                                chatMessagesEl.appendChild(err);
                                 pruneIfOverflowing();
+                                return;
                             }
-                        });
-                        ablyChannel.presence.get((err, members) => {
-                            if (!err) renderActiveUsers(members);
-                        });
-                        ablyChannel.presence.subscribe(() => {
+
+                            ablyAttached = true;
+
+                            // Subscribe to messages only once
+                            if (!messageSubscribed) {
+                                ablyChannel.subscribe('message', (msg) => {
+                                    const payload = msg.data || {};
+                                    const who = payload.nick || msg.clientId || 'Guest';
+                                    const text = payload.text || '';
+                                    if (!text) return;
+                                    const line = renderMessage(who, text);
+                                    chatMessagesEl.appendChild(line);
+                                    pruneIfOverflowing();
+                                    chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+                                });
+                                messageSubscribed = true;
+                            }
+
+                            // Presence: enter once
+                            try {
+                                ablyChannel.presence.enter({ nick }, (presenceErr) => {
+                                    if (presenceErr) {
+                                        const er = createMessageElement('[System]: Presence enter failed.');
+                                        chatMessagesEl.appendChild(er);
+                                        pruneIfOverflowing();
+                                    }
+                                });
+                            } catch (_) {}
+
                             ablyChannel.presence.get((err, members) => {
                                 if (!err) renderActiveUsers(members);
                             });
+                            // Update presence list when presence changes
+                            ablyChannel.presence.subscribe(() => {
+                                ablyChannel.presence.get((err, members) => {
+                                    if (!err) renderActiveUsers(members);
+                                });
+                            });
                         });
-                    });
+                    }
 
                     // Clean up on unload
                     window.addEventListener('beforeunload', () => {
                         try { ablyChannel && ablyChannel.presence.leave(); } catch (_) {}
+                        try { ably && ably.close(); } catch (_) {}
                     });
                 } else if (stateChange.current === 'failed' || stateChange.current === 'suspended') {
                     ablyConnected = false;
