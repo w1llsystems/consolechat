@@ -61,15 +61,14 @@
 <div class="bg-gray-800 px-4 py-2 flex items-center justify-center">
 <p class="text-gray-400 text-sm">ACTIVE_USERS</p>
 </div>
-<div class="p-4 space-y-2 overflow-y-auto flex-1">
-<!-- Active users will be listed here dynamically (intentionally left empty) -->
-</div>
+<div id="active-users-list" class="p-4 space-y-2 overflow-y-auto flex-1"></div>
 </div>
 </div>
 </div>
 </div>
 </div>
 
+<script src="https://cdn.ably.com/lib/ably.min-1.js"></script>
 <script>
     // Minimal client-side anonymous chat behavior
     // - No persistence (no localStorage/sessionStorage)
@@ -78,12 +77,15 @@
     // - When the messages container overflows, oldest messages are removed so the layout stays clean
 
     (function () {
+        // Configure your Ably API key here (for quick demo only). For production, prefer Token Auth.
+        const ABLY_API_KEY = 'REPLACE_WITH_YOUR_ABLY_API_KEY';
         const initialStateEl = document.querySelector('.initial-state');
         const chatMessagesEl = document.querySelector('.chat-messages');
         const nicknameInput = document.querySelector('.nickname-input input');
         const messageInputWrapper = document.querySelector('.message-input');
         const messageTextarea = document.querySelector('.message-input textarea');
         const sendButton = document.querySelector('.message-input button');
+        const activeUsersListEl = document.querySelector('#active-users-list');
 
         // Make sure button acts as button
         if (sendButton) sendButton.setAttribute('type', 'button');
@@ -91,6 +93,9 @@
         // State
         let currentIp = null;
         let ipCheckAvailable = false;
+        let ably = null;
+        let ablyChannel = null;
+        let ablyConnected = false;
 
         // Helpers
         function createMessageElement(text) {
@@ -104,6 +109,76 @@
             while (chatMessagesEl && chatMessagesEl.scrollHeight > chatMessagesEl.clientHeight && chatMessagesEl.firstChild) {
                 chatMessagesEl.removeChild(chatMessagesEl.firstChild);
             }
+        }
+
+        function renderActiveUsers(members) {
+            if (!activeUsersListEl) return;
+            activeUsersListEl.innerHTML = '';
+            (members || []).forEach((m) => {
+                const name = (m.clientId || (m.data && m.data.nick) || 'Guest');
+                const p = document.createElement('p');
+                p.className = 'text-[#00FF00] text-sm';
+                p.innerHTML = '<span class="text-green-500">•</span> ' + name;
+                activeUsersListEl.appendChild(p);
+            });
+        }
+
+        function ablyConnect(nick) {
+            if (!ABLY_API_KEY || ABLY_API_KEY.startsWith('REPLACE_') || ABLY_API_KEY.startsWith('REPLACE')) {
+                // Fallback to local-only if key not configured
+                const warn = createMessageElement('[System]: Ably API key not configured. Running in local-only mode.');
+                chatMessagesEl.appendChild(warn);
+                pruneIfOverflowing();
+                return;
+            }
+            try {
+                ably = new Ably.Realtime({ key: ABLY_API_KEY, clientId: nick });
+            } catch (e) {
+                const errMsg = createMessageElement('[System]: Failed to initialize Ably client. Falling back to local mode.');
+                chatMessagesEl.appendChild(errMsg);
+                pruneIfOverflowing();
+                return;
+            }
+
+            ably.connection.on((stateChange) => {
+                if (stateChange.current === 'connected') {
+                    ablyConnected = true;
+                    ablyChannel = ably.channels.get('public:chat');
+
+                    // Subscribe to messages
+                    ablyChannel.subscribe('message', (msg) => {
+                        const payload = msg.data || {};
+                        const who = payload.nick || msg.clientId || 'Guest';
+                        const text = payload.text || '';
+                        if (!text) return;
+                        const line = createMessageElement(`[${who}]: ${text}`);
+                        chatMessagesEl.appendChild(line);
+                        chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+                        pruneIfOverflowing();
+                    });
+
+                    // Presence
+                    ablyChannel.presence.enter({ nick });
+                    ablyChannel.presence.get((err, members) => {
+                        if (!err) renderActiveUsers(members);
+                    });
+                    ablyChannel.presence.subscribe((presenceMsg) => {
+                        ablyChannel.presence.get((err, members) => {
+                            if (!err) renderActiveUsers(members);
+                        });
+                    });
+
+                    // Clean up on unload
+                    window.addEventListener('beforeunload', () => {
+                        try { ablyChannel && ablyChannel.presence.leave(); } catch (_) {}
+                    });
+                } else if (stateChange.current === 'failed' || stateChange.current === 'suspended') {
+                    ablyConnected = false;
+                    const msg = createMessageElement('[System]: Connection to Ably lost. Messages will be local-only until reconnection.');
+                    chatMessagesEl.appendChild(msg);
+                    pruneIfOverflowing();
+                }
+            });
         }
 
         // Fetch public IP (uses api.ipify.org). If it fails, we disable IP enforcement.
@@ -160,10 +235,13 @@
             if (chatMessagesEl) chatMessagesEl.classList.remove('hidden');
             if (messageInputWrapper) messageInputWrapper.classList.remove('hidden');
             if (chatMessagesEl) {
+                chatMessagesEl.innerHTML = '';
                 const welcome = createMessageElement(`[System]: Welcome, ${nick}!`);
                 chatMessagesEl.appendChild(welcome);
                 pruneIfOverflowing();
             }
+            // Connect to Ably (if configured)
+            ablyConnect(nick);
             messageTextarea && messageTextarea.focus();
         }
 
@@ -172,8 +250,20 @@
             const text = messageTextarea.value.trim();
             if (!text) return;
             const nick = nicknameInput.value.trim() || 'Guest';
-            const msg = createMessageElement(`[${nick}]: ${text}`);
-            chatMessagesEl.appendChild(msg);
+            if (ablyConnected && ablyChannel) {
+                // Publish via Ably to broadcast to all
+                try {
+                    ablyChannel.publish('message', { nick, text });
+                } catch (_) {
+                    // Fallback to local append if publish fails
+                    const msg = createMessageElement(`[${nick}]: ${text}`);
+                    chatMessagesEl.appendChild(msg);
+                }
+            } else {
+                // Local-only mode
+                const msg = createMessageElement(`[${nick}]: ${text}`);
+                chatMessagesEl.appendChild(msg);
+            }
             messageTextarea.value = '';
             chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
             pruneIfOverflowing();
