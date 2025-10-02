@@ -77,8 +77,6 @@
     // - When the messages container overflows, oldest messages are removed so the layout stays clean
 
     (function () {
-        // Configure your Ably API key here (for quick demo only). For production, prefer Token Auth.
-        const ABLY_API_KEY = 'REPLACE_WITH_YOUR_ABLY_API_KEY';
         const initialStateEl = document.querySelector('.initial-state');
         const chatMessagesEl = document.querySelector('.chat-messages');
         const nicknameInput = document.querySelector('.nickname-input input');
@@ -93,7 +91,7 @@
         // State
         let currentIp = null;
         let ipCheckAvailable = false;
-        let ably = null;
+    let ably = null;
         let ablyChannel = null;
         let ablyConnected = false;
 
@@ -124,15 +122,10 @@
         }
 
         function ablyConnect(nick) {
-            if (!ABLY_API_KEY || ABLY_API_KEY.startsWith('REPLACE_') || ABLY_API_KEY.startsWith('REPLACE')) {
-                // Fallback to local-only if key not configured
-                const warn = createMessageElement('[System]: Ably API key not configured. Running in local-only mode.');
-                chatMessagesEl.appendChild(warn);
-                pruneIfOverflowing();
-                return;
-            }
             try {
-                ably = new Ably.Realtime({ key: ABLY_API_KEY, clientId: nick });
+                // Use Netlify Function to obtain a Token (Token Auth)
+                const authUrl = '/.netlify/functions/ably-token?clientId=' + encodeURIComponent(nick);
+                ably = new Ably.Realtime({ authUrl });
             } catch (e) {
                 const errMsg = createMessageElement('[System]: Failed to initialize Ably client. Falling back to local mode.');
                 chatMessagesEl.appendChild(errMsg);
