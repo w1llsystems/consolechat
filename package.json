@@ -1,0 +1,9 @@
+{
+  "name": "consolechat",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "dependencies": {
+    "ably": "^1.2.45"
+  }
+}

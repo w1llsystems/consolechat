@@ -7,3 +7,17 @@
   [headers.values]
     X-Content-Type-Options = "nosniff"
     X-Frame-Options = "SAMEORIGIN"
+
+[functions]
+  node_bundler = "esbuild"
+  external_node_modules = ["ably"]
+
+[dev]
+  command = ""
+  framework = ""
+  targetPort = 8888
+  port = 8889
+  publish = "."
+
+[build.environment]
+  NODE_VERSION = "18"
