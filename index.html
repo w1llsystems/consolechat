@@ -18,7 +18,7 @@
 <div class="relative flex h-auto min-h-screen w-full flex-col bg-[#111811] dark group/design-root overflow-x-hidden" style='font-family: "Space Grotesk", "Noto Sans", sans-serif;'>
 <div class="layout-container flex h-full grow flex-col">
 <div class="px-4 py-5 sm:px-10 md:px-20 lg:px-40 flex flex-1 justify-center">
-<div class="layout-content-container flex w-full max-w-6xl flex-1 border-2 border-gray-700 rounded-lg bg-[#0D0D0D]" style="width:1327px; height:573px;">
+<div class="layout-content-container flex flex-col md:flex-row w-full max-w-6xl flex-1 border-2 border-gray-700 rounded-lg bg-[#0D0D0D] h-[70vh] md:h-[75vh] lg:h-[573px]">
 <div class="flex-1 flex flex-col">
 <div class="flex items-center justify-between bg-gray-800 px-4 py-2 rounded-t-lg">
 <div class="flex items-center gap-2">
@@ -57,11 +57,11 @@
             </div>
 </div>
 </div>
-<div class="w-[240px] border-l-2 border-gray-700 flex flex-col">
+<div class="w-full md:w-[240px] border-t-2 md:border-t-0 md:border-l-2 border-gray-700 flex flex-col">
 <div class="bg-gray-800 px-4 py-2 flex items-center justify-center">
 <p class="text-gray-400 text-sm">ACTIVE_USERS</p>
 </div>
-<div id="active-users-list" class="p-4 space-y-2 overflow-y-auto flex-1"></div>
+<div id="active-users-list" class="p-4 space-y-2 overflow-y-auto max-h-40 md:max-h-none flex-1"></div>
 </div>
 </div>
 </div>
